@@ -1,0 +1,32 @@
+# Python
+backend/.venv/
+backend/__pycache__/
+backend/**/__pycache__/
+backend/.pytest_cache/
+backend/test_nailsocial.db
+backend/test_storage/
+*.pyc
+
+# Env files
+backend/.env
+frontend/.env
+
+# Storage (local dev artifacts)
+backend/storage/original/*
+backend/storage/generated/*
+backend/storage/exports/*
+!backend/storage/original/.gitkeep
+!backend/storage/generated/.gitkeep
+!backend/storage/exports/.gitkeep
+
+# Node / frontend
+frontend/node_modules/
+frontend/dist/
+
+# Editors / OS
+.DS_Store
+
+# Internal planning docs — not part of the deployed app, keep out of the repo
+AGENTS.md
+CLAUDE.md
+Idea.txt

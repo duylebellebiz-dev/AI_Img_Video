@@ -1,0 +1,61 @@
+services:
+  # --- API server -----------------------------------------------------------
+  # Batch/edit jobs run in-process via FastAPI BackgroundTasks — there is no
+  # separate worker service, since Render's free tier has no Background
+  # Worker plan (that requires Starter or above).
+  - type: web
+    name: nailsocial-backend
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    plan: free
+    healthCheckPath: /docs
+    envVars:
+      # Using Supabase Postgres instead of Render's free Postgres (which
+      # auto-expires after 90 days) — paste the full connection string
+      # manually in the Render dashboard, with the real DB password filled
+      # in (URL-encode it if it contains special characters).
+      - key: DATABASE_URL
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false # set manually in Render dashboard, never commit this
+      - key: ANTHROPIC_MODEL
+        value: claude-sonnet-5
+      - key: GEMINI_API_KEY
+        sync: false # set manually in Render dashboard, never commit this
+      - key: GEMINI_IMAGE_MODEL
+        value: gemini-2.5-flash-image
+      - key: STORAGE_ROOT
+        value: /app/storage
+      # Cloudflare R2 (S3-compatible) — the durable copy of storage_root.
+      # Required on this plan: free web services have no persistent disk, so
+      # local storage_root is wiped on every restart/scale-to-zero cycle.
+      # Create a free R2 bucket (10GB free) and fill these in manually.
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET_NAME
+        sync: false
+      - key: CORS_ORIGINS
+        value: https://nailsocial-frontend.onrender.com
+      - key: QUALITY_PASS_THRESHOLD
+        value: "80"
+      - key: QUALITY_MAX_RETRIES
+        value: "3"
+      - key: BATCH_MIN_IMAGES
+        value: "1"
+      - key: BATCH_MAX_IMAGES
+        value: "100"
+
+  # --- Frontend (static build, no Docker needed) --------------------------
+  - type: web
+    name: nailsocial-frontend
+    runtime: static
+    buildCommand: cd frontend && npm install && npm run build
+    staticPublishPath: frontend/dist
+    envVars:
+      - key: VITE_API_URL
+        value: https://nailsocial-backend.onrender.com
