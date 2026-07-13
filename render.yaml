@@ -24,7 +24,7 @@ services:
       - key: GEMINI_API_KEY
         sync: false # set manually in Render dashboard, never commit this
       - key: GEMINI_IMAGE_MODEL
-        value: gemini-2.5-flash-image
+        value: gemini-3-pro-image
       - key: STORAGE_ROOT
         value: /app/storage
       # Cloudflare R2 (S3-compatible) — the durable copy of storage_root.
