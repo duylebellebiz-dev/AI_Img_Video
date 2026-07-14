@@ -3,12 +3,56 @@ import { cancelEditBatchJob, createEditBatchJob, getEditBatchJob } from "../api"
 import EditJobStatus from "./EditJobStatus";
 import ImageDropzone from "./ImageDropzone";
 import LogoUploader from "./LogoUploader";
+import PromptTemplates from "./PromptTemplates";
 import SizeSelector from "./SizeSelector";
 import { AlertIcon, SparklesIcon, Spinner } from "./icons";
 
 const POLL_INTERVAL_MS = 2000;
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 const MAX_POLL_ERRORS = 3;
+
+const EDIT_PROMPT_TEMPLATES = [
+  {
+    label: "Đổi nhẹ mẫu nail",
+    text: "Make the nail design different from the original image a little bit, keep everything else exactly the same.",
+  },
+  {
+    label: "Giữ nguyên nền ảnh",
+    text: "Keep the background of the original image exactly the same, do not change it.",
+  },
+  {
+    label: "Tăng sáng & làm nét",
+    text: "Increase the brightness and sharpen the image to make it look clearer and more vivid.",
+  },
+  {
+    label: "Đổi màu sơn nail",
+    text: "Change the nail polish color, keep the same nail shape and design.",
+  },
+  {
+    label: "Nền chụp chuyên nghiệp",
+    text: "Replace the background with a clean, minimalist, high-end commercial photography background.",
+  },
+  {
+    label: "Ánh sáng studio",
+    text: "Adjust the lighting to look like professional studio photography with soft, natural light.",
+  },
+  {
+    label: "Làm mịn da tay",
+    text: "Smooth and retouch the skin on the hand naturally, without changing the hand shape or nail design.",
+  },
+  {
+    label: "Xóa vật thể thừa",
+    text: "Remove any distracting objects or clutter from the background, keep the hand and nails unchanged.",
+  },
+  {
+    label: "Phong cách sang trọng",
+    text: "Give the image a luxury, high-end nail salon aesthetic.",
+  },
+  {
+    label: "Giữ nguyên dáng tay",
+    text: "Keep the exact same hand shape, pose, and finger position, only change what is described above.",
+  },
+];
 
 export default function PhotoEditor() {
   const [images, setImages] = useState([]);
@@ -27,6 +71,15 @@ export default function PhotoEditor() {
   useEffect(() => {
     return () => clearInterval(pollRef.current);
   }, []);
+
+  function handleTemplateSelect(text) {
+    setPrompt((prev) => {
+      const trimmed = prev.trim();
+      if (!trimmed) return text;
+      const separator = /[.!?]$/.test(trimmed) ? " " : ". ";
+      return `${trimmed}${separator}${text}`;
+    });
+  }
 
   function handleLogoChange(url) {
     setLogoUrl(url);
@@ -118,7 +171,18 @@ export default function PhotoEditor() {
           <SizeSelector onChange={setSize} />
 
           <div>
-            <label className="block text-sm font-medium text-neutral-900">Edit instruction</label>
+            <div className="flex items-center justify-between">
+              <label className="block text-sm font-medium text-neutral-900">Edit instruction</label>
+              {prompt && (
+                <button
+                  type="button"
+                  onClick={() => setPrompt("")}
+                  className="text-xs font-medium text-neutral-400 hover:text-neutral-600"
+                >
+                  Xóa
+                </button>
+              )}
+            </div>
             <textarea
               className="mt-1.5 w-full rounded-lg border border-neutral-300 p-3 text-sm focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/20"
               rows={2}
@@ -126,6 +190,9 @@ export default function PhotoEditor() {
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
             />
+            <div className="mt-2.5">
+              <PromptTemplates templates={EDIT_PROMPT_TEMPLATES} onSelect={handleTemplateSelect} />
+            </div>
           </div>
 
           {logoUrl && (

@@ -2,6 +2,11 @@ from pathlib import Path
 
 from PIL import Image
 
+# Pillow's JPEG default (quality=75, 2x2 chroma subsampling) is too lossy for
+# commercial nail photography — it visibly softens skin texture and gem/rhinestone
+# detail. Applied to every in-place re-save below; harmless no-ops for PNG output.
+_JPEG_SAVE_KWARGS = {"quality": 95, "subsampling": 0}
+
 
 def detect_image_mime_type(path: Path) -> str:
     with Image.open(path) as img:
@@ -60,7 +65,7 @@ def apply_watermark(image_path: Path, logo_path: Path, margin_ratio: float = 0.0
             position = (base.width - target_width - margin, base.height - target_height - margin)
             base.alpha_composite(logo, position)
 
-        base.convert("RGB").save(image_path)
+        base.convert("RGB").save(image_path, **_JPEG_SAVE_KWARGS)
 
 
 def fit_to_size(image_path: Path, width: int, height: int) -> None:
@@ -86,4 +91,4 @@ def fit_to_size(image_path: Path, width: int, height: int) -> None:
         left = (scaled_width - width) // 2
         top = (scaled_height - height) // 2
         img = img.crop((left, top, left + width, top + height))
-        img.save(image_path)
+        img.save(image_path, **_JPEG_SAVE_KWARGS)

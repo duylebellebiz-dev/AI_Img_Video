@@ -23,6 +23,16 @@ _NO_TEXT_SUFFIX = (
     "completely free of overlaid or embedded text."
 )
 
+# Same rationale as _NO_TEXT_SUFFIX above: nudges every real Gemini call toward
+# its sharpest, highest-resolution output regardless of what the upstream
+# prompt (Claude or mock) already asked for.
+_QUALITY_SUFFIX = (
+    " Render at the highest possible resolution and sharpness: tack-sharp focus "
+    "across the entire frame, crisp fine detail in skin texture, nail finish, and "
+    "any gems or rhinestones, no blur, no softening, no compression artifacts — "
+    "professional macro-photography level clarity."
+)
+
 
 def _mock_generate(
     design_path: Path,
@@ -166,7 +176,7 @@ class ImageService:
         response = self._client.models.generate_content(
             model=self.settings.gemini_image_model,
             contents=[
-                prompt + _NO_TEXT_SUFFIX,
+                prompt + _QUALITY_SUFFIX + _NO_TEXT_SUFFIX,
                 types.Part.from_bytes(data=design_bytes, mime_type=detect_image_mime_type(design_path)),
                 types.Part.from_bytes(data=pose_bytes, mime_type=detect_image_mime_type(pose_path)),
             ],
@@ -195,7 +205,7 @@ class ImageService:
         response = self._client.models.generate_content(
             model=self.settings.gemini_image_model,
             contents=[
-                prompt + _NO_TEXT_SUFFIX,
+                prompt + _QUALITY_SUFFIX + _NO_TEXT_SUFFIX,
                 types.Part.from_bytes(data=image_bytes, mime_type=detect_image_mime_type(image_path)),
             ],
         )
