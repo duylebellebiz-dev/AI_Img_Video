@@ -6,7 +6,7 @@ services:
   - type: web
     name: nailsocial-backend
     runtime: docker
-    dockerfilePath: Dockerfile
+    dockerfilePath: ./backend/Dockerfile
     dockerContext: ./backend
     plan: free
     healthCheckPath: /docs
