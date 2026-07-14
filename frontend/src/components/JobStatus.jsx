@@ -1,4 +1,4 @@
-import { downloadUrl } from "../api";
+import { downloadUrl, mediaUrl } from "../api";
 import { AlertIcon, CheckCircleIcon, DownloadIcon, Spinner, XCircleIcon } from "./icons";
 
 const STATUS_STYLES = {
@@ -81,7 +81,7 @@ export default function JobStatus({ job, cancelling, onCancel }) {
               <div className="aspect-[4/5] w-full bg-neutral-100">
                 {img.image_url ? (
                   <img
-                    src={img.image_url}
+                    src={mediaUrl(img.image_url)}
                     alt={`${img.design_filename} + ${img.pose_filename}`}
                     className="h-full w-full object-cover"
                   />

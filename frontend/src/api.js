@@ -1,4 +1,16 @@
-const BASE_URL = ""; // same-origin via Vite dev proxy (see vite.config.js)
+// In local dev this stays "" (same-origin) and Vite's dev proxy in
+// vite.config.js forwards /api and /media to the local backend. In a
+// production static build there's no such proxy, so VITE_API_URL (baked in
+// at build time) must point straight at the deployed backend origin.
+const BASE_URL = import.meta.env.VITE_API_URL || "";
+
+// The backend returns image/logo URLs as origin-relative paths (e.g.
+// "/media/generated/..."). In production those need the same BASE_URL prefix
+// as API calls, or the browser resolves them against the frontend's own
+// origin instead of the backend's.
+export function mediaUrl(path) {
+  return path ? `${BASE_URL}${path}` : path;
+}
 
 export async function createBatchJob({
   designImages,

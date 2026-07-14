@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { deleteLogo, getLogo, uploadLogo } from "../api";
+import { deleteLogo, getLogo, mediaUrl, uploadLogo } from "../api";
 import { AlertIcon, Spinner, TrashIcon, UploadIcon } from "./icons";
 
 export default function LogoUploader({ onLogoChange }) {
@@ -62,7 +62,7 @@ export default function LogoUploader({ onLogoChange }) {
           <Spinner className="h-4 w-4 animate-spin text-neutral-400" />
         ) : logoUrl ? (
           <div className="flex items-center gap-2.5">
-            <img src={logoUrl} alt="Salon logo" className="h-10 w-10 rounded border border-neutral-200 bg-white object-contain" />
+            <img src={mediaUrl(logoUrl)} alt="Salon logo" className="h-10 w-10 rounded border border-neutral-200 bg-white object-contain" />
             <button
               type="button"
               onClick={handleRemove}

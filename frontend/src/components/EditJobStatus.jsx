@@ -1,4 +1,4 @@
-import { editDownloadUrl } from "../api";
+import { editDownloadUrl, mediaUrl } from "../api";
 import { AlertIcon, CheckCircleIcon, DownloadIcon, Spinner, XCircleIcon } from "./icons";
 
 const STATUS_STYLES = {
@@ -80,7 +80,7 @@ export default function EditJobStatus({ job, cancelling, onCancel }) {
             <div key={e.id} className="overflow-hidden border border-neutral-200 bg-white shadow-sm">
               <div className="aspect-square w-full bg-neutral-100">
                 {e.image_url ? (
-                  <img src={e.image_url} alt="Edited result" className="h-full w-full object-cover" />
+                  <img src={mediaUrl(e.image_url)} alt="Edited result" className="h-full w-full object-cover" />
                 ) : e.status === "failed" || e.status === "cancelled" ? (
                   <div className="flex h-full w-full flex-col items-center justify-center gap-1.5 text-neutral-400">
                     <XCircleIcon className="h-5 w-5" />
