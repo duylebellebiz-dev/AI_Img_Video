@@ -7,7 +7,9 @@ from fastapi.responses import FileResponse
 
 from app.config import get_settings
 from app.database import Base, engine
-from app.routers import batch, branding, edit
+from app.db_schema_sync import sync_schema
+from app.routers import auth, batch, branding, campaigns, edit, notifications, performance, scheduled_posts, social, usage
+from app.services import scheduler_service
 from app.services.storage_service import StorageService
 
 
@@ -15,7 +17,10 @@ from app.services.storage_service import StorageService
 async def lifespan(app: FastAPI):
     # Phase 1 MVP: create tables directly instead of Alembic migrations.
     Base.metadata.create_all(bind=engine)
+    sync_schema(engine)
+    scheduler_service.start_scheduler()
     yield
+    scheduler_service.stop_scheduler()
 
 
 settings = get_settings()
@@ -33,6 +38,13 @@ app.add_middleware(
 app.include_router(batch.router)
 app.include_router(edit.router)
 app.include_router(branding.router)
+app.include_router(auth.router)
+app.include_router(social.router)
+app.include_router(scheduled_posts.router)
+app.include_router(notifications.router)
+app.include_router(campaigns.router)
+app.include_router(usage.router)
+app.include_router(performance.router)
 
 (settings.storage_path / "generated").mkdir(parents=True, exist_ok=True)
 (settings.storage_path / "original").mkdir(parents=True, exist_ok=True)
@@ -42,9 +54,10 @@ _storage = StorageService(settings)
 
 
 def _serve(path: Path) -> FileResponse:
-    """Local storage_root is just a cache in front of R2 — a host without a
-    persistent disk (e.g. Render's free web service) can lose local files on
-    restart, so pull the file back from R2 on a cache miss before serving."""
+    """Local storage_root is just a cache in front of Cloudinary — a host
+    without a persistent disk (e.g. Render's free web service) can lose local
+    files on restart, so pull the file back from Cloudinary on a cache miss
+    before serving."""
     _storage.ensure_local(path)
     if not path.exists():
         raise HTTPException(status_code=404, detail="File not found")
@@ -66,10 +79,11 @@ def media_original(job_id: str, kind: str, filename: str) -> FileResponse:
     return _serve(settings.storage_path / "original" / job_id / kind / filename)
 
 
-@app.get("/media/branding/{filename}", name="branding")
-def media_branding(filename: str) -> FileResponse:
+@app.get("/media/branding/{user_id}/{filename}", name="branding")
+def media_branding(user_id: str, filename: str) -> FileResponse:
+    user_id = Path(user_id).name
     filename = Path(filename).name
-    return _serve(settings.storage_path / "branding" / filename)
+    return _serve(settings.storage_path / "branding" / user_id / filename)
 
 
 @app.get("/api/health")

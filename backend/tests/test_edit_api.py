@@ -6,10 +6,14 @@ from fastapi.testclient import TestClient
 def client():
     from app import main as main_module
     from app.database import Base, engine
+    from app.services.auth_service import SESSION_COOKIE_NAME, create_session_token
+    from conftest import _make_user
 
     Base.metadata.create_all(bind=engine)
 
+    user = _make_user("salon", "Test Salon")
     with TestClient(main_module.app) as test_client:
+        test_client.cookies.set(SESSION_COOKIE_NAME, create_session_token(user.id))
         yield test_client
 
 

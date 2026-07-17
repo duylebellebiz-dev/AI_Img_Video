@@ -112,6 +112,71 @@ export function TrashIcon(props) {
   );
 }
 
+export function BellIcon(props) {
+  return (
+    <svg {...base(props)}>
+      <path d="M6 10.5a6 6 0 0 1 12 0v4l1.5 2.5h-15L6 14.5v-4Z" />
+      <path d="M10 19.5a2 2 0 0 0 4 0" />
+    </svg>
+  );
+}
+
+export function LinkIcon(props) {
+  return (
+    <svg {...base(props)}>
+      <path d="M9.5 14.5 14.5 9.5" />
+      <path d="M11 6.5 12.6 4.9a3.2 3.2 0 0 1 4.5 4.5L15.5 11" />
+      <path d="M13 17.5 11.4 19.1a3.2 3.2 0 0 1-4.5-4.5L8.5 13" />
+    </svg>
+  );
+}
+
+export function CalendarIcon(props) {
+  return (
+    <svg {...base(props)}>
+      <rect x="3.5" y="5" width="17" height="15" rx="2" />
+      <path d="M3.5 9.5h17" />
+      <path d="M8 3v3.5M16 3v3.5" />
+    </svg>
+  );
+}
+
+export function ChevronLeftIcon(props) {
+  return (
+    <svg {...base(props)}>
+      <path d="M15 5.5 8.5 12l6.5 6.5" />
+    </svg>
+  );
+}
+
+export function ChevronRightIcon(props) {
+  return (
+    <svg {...base(props)}>
+      <path d="M9 5.5 15.5 12 9 18.5" />
+    </svg>
+  );
+}
+
+export function FolderIcon(props) {
+  return (
+    <svg {...base(props)}>
+      <path d="M4 6.5A1.5 1.5 0 0 1 5.5 5h4l2 2h7A1.5 1.5 0 0 1 20 8.5v9A1.5 1.5 0 0 1 18.5 19h-13A1.5 1.5 0 0 1 4 17.5v-11Z" />
+    </svg>
+  );
+}
+
+export function ChartIcon(props) {
+  return (
+    <svg {...base(props)}>
+      <path d="M4 20V4" />
+      <path d="M4 20h16" />
+      <path d="M8 20v-6" />
+      <path d="M12.5 20V9" />
+      <path d="M17 20v-9" />
+    </svg>
+  );
+}
+
 export function Spinner(props) {
   return (
     <svg viewBox="0 0 24 24" fill="none" className={props.className}>

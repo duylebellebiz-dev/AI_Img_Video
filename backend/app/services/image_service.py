@@ -9,7 +9,8 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 from app.config import Settings, get_settings
-from app.services.media_utils import detect_image_mime_type, extension_for_mime_type, fit_to_size
+from app.services import usage_service
+from app.services.media_utils import detect_image_mime_type, extension_for_mime_type, fit_to_size, prepare_image_for_api
 
 # Appended to every real Gemini prompt regardless of who authored it (Claude
 # or the mock builder). Gemini image models frequently hallucinate stock-photo
@@ -31,6 +32,55 @@ _QUALITY_SUFFIX = (
     "across the entire frame, crisp fine detail in skin texture, nail finish, and "
     "any gems or rhinestones, no blur, no softening, no compression artifacts — "
     "professional macro-photography level clarity."
+)
+
+# Hard-coded compositing contract for the two-image generate_image() call.
+# Deliberately NOT left to Claude's freeform prompt: Claude never sees the
+# actual image bytes (only filenames), so its wording can drift into vague
+# "combine these images" phrasing. Gemini's multi-image editing is sensitive
+# to unlabeled image order/role, and a vague instruction is what was causing
+# it to sometimes just echo one input back almost unchanged (see the near-
+# duplicate check in quality_service.py, which was added for the same bug).
+# This preamble is appended to every real call regardless of prompt content,
+# so correctness doesn't depend on the upstream prompt being well-formed.
+#
+# Two CRITICAL sentences target the two failure modes actually observed in
+# production score_breakdown data, not hypothetical ones:
+# 1. Echoing a reference image back unchanged (same wording style already
+#    proven, via _build_near_duplicate_feedback, to steer Gemini away from
+#    it — sent preemptively here so more attempts get it right first try).
+# 2. nail_accuracy scoring far lower and far more volatile than every other
+#    criterion (anatomy/pose/lighting/background/realism all land 75-95;
+#    nail_accuracy ranged 8-94) even when the composite itself is otherwise
+#    correct — i.e. Gemini merges the two images fine but approximates the
+#    nail design instead of replicating it precisely.
+_COMPOSITING_CONTRACT = (
+    " You are given exactly two reference images, in this order: "
+    "Image 1 = HAND POSE reference — Image 2 = NAIL DESIGN reference. "
+    "Generate ONE new photorealistic image by compositing them as follows: "
+    "(a) from Image 1, preserve the exact hand and finger anatomy, finger "
+    "positions, camera angle/framing, skin tone, lighting, and background "
+    "— do not alter any of these; "
+    "(b) from Image 2, replicate the nail design with precise fidelity: the "
+    "exact polish color(s) including any gradient/ombre, the exact pattern "
+    "or motif and where it sits on each nail, any embellishments (rhinestones, "
+    "glitter, foil, charms) in matching positions, and the same finish "
+    "(glossy/matte/chrome) — then apply this exact design onto every visible "
+    "nail on the hand from Image 1. Match Image 2 nail-by-nail, not a "
+    "generic or simplified approximation of its style; "
+    "do NOT copy Image 2's background, hand, framing, or composition. "
+    "The output must be a new merged image, not a copy of either reference: "
+    "it must show the pose/hand/background from Image 1 with the nail design "
+    "from Image 2 applied to the nails. "
+    "CRITICAL: the most common mistake is returning Image 1 or Image 2 "
+    "almost unchanged instead of actually merging them — the output must "
+    "differ visibly from BOTH input reference photos, while still keeping "
+    "the hand/pose/background from Image 1 and the nail design from Image 2. "
+    "CRITICAL: nail design accuracy is graded strictly against Image 2 — a "
+    "close-but-not-exact match (wrong shade, missing an embellishment, a "
+    "simplified version of the pattern) is scored as a failure just like "
+    "skipping the design entirely, so match it precisely rather than "
+    "approximately."
 )
 
 
@@ -170,16 +220,21 @@ class ImageService:
 
         from google.genai import types
 
-        design_bytes = design_path.read_bytes()
-        pose_bytes = pose_path.read_bytes()
+        design_bytes, design_mime_type = prepare_image_for_api(design_path)
+        pose_bytes, pose_mime_type = prepare_image_for_api(pose_path)
 
         response = self._client.models.generate_content(
             model=self.settings.gemini_image_model,
             contents=[
-                prompt + _QUALITY_SUFFIX + _NO_TEXT_SUFFIX,
-                types.Part.from_bytes(data=design_bytes, mime_type=detect_image_mime_type(design_path)),
-                types.Part.from_bytes(data=pose_bytes, mime_type=detect_image_mime_type(pose_path)),
+                prompt + _COMPOSITING_CONTRACT + _QUALITY_SUFFIX + _NO_TEXT_SUFFIX,
+                "Image 1 (HAND POSE reference):",
+                types.Part.from_bytes(data=pose_bytes, mime_type=pose_mime_type),
+                "Image 2 (NAIL DESIGN reference):",
+                types.Part.from_bytes(data=design_bytes, mime_type=design_mime_type),
             ],
+        )
+        usage_service.record_gemini_usage(
+            "generate_image", self.settings.gemini_image_model, response, image_count=1, settings=self.settings
         )
 
         return _extract_and_verify_image(response, out_path, width, height)
@@ -200,14 +255,17 @@ class ImageService:
 
         from google.genai import types
 
-        image_bytes = image_path.read_bytes()
+        image_bytes, image_mime_type = prepare_image_for_api(image_path)
 
         response = self._client.models.generate_content(
             model=self.settings.gemini_image_model,
             contents=[
                 prompt + _QUALITY_SUFFIX + _NO_TEXT_SUFFIX,
-                types.Part.from_bytes(data=image_bytes, mime_type=detect_image_mime_type(image_path)),
+                types.Part.from_bytes(data=image_bytes, mime_type=image_mime_type),
             ],
+        )
+        usage_service.record_gemini_usage(
+            "edit_image", self.settings.gemini_image_model, response, image_count=1, settings=self.settings
         )
 
         return _extract_and_verify_image(response, out_path, width, height)

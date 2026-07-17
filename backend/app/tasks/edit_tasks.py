@@ -99,7 +99,7 @@ def process_edit_job(job_id: str) -> None:
         prompt = job.prompt
         image_width = job.image_width
         image_height = job.image_height
-        logo_path = branding_service.get_logo_path(db) if job.apply_logo else None
+        logo_path = branding_service.get_logo_path(db, job.user_id) if job.apply_logo else None
 
         generated_paths: list[Path] = []
         job_cancelled = False

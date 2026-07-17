@@ -1,7 +1,16 @@
+import io
+import shutil
+
 import pytest
 from PIL import Image
 
-from app.services.media_utils import apply_watermark, fit_to_size, validate_size
+from app.services.media_utils import (
+    apply_watermark,
+    fit_to_size,
+    is_near_duplicate_image,
+    prepare_image_for_api,
+    validate_size,
+)
 
 
 def test_validate_size_allows_both_none():
@@ -113,3 +122,84 @@ def test_fit_to_size_crops_center_without_distorting_aspect(tmp_path):
 
     with Image.open(path) as img:
         assert img.size == (100, 100)
+
+
+def test_is_near_duplicate_image_detects_a_resaved_resized_copy(tmp_path):
+    original = tmp_path / "original.png"
+    Image.new("RGB", (4, 4), color=(255, 0, 0)).save(original)
+
+    copy = tmp_path / "copy.jpg"
+    with Image.open(original) as img:
+        img.convert("RGB").resize((400, 400)).save(copy, format="JPEG", quality=90)
+
+    assert is_near_duplicate_image(original, copy) is True
+
+
+def test_is_near_duplicate_image_detects_identical_bytes(tmp_path):
+    original = tmp_path / "a.png"
+    Image.new("RGB", (10, 10), color=(10, 200, 30)).save(original)
+    duplicate = tmp_path / "b.png"
+    shutil.copyfile(original, duplicate)
+
+    assert is_near_duplicate_image(original, duplicate) is True
+
+
+def test_prepare_image_for_api_leaves_small_images_untouched(tmp_path):
+    path = tmp_path / "small.png"
+    Image.new("RGB", (800, 500), color=(10, 20, 30)).save(path)
+
+    data, mime_type = prepare_image_for_api(path)
+
+    assert data == path.read_bytes()
+    assert mime_type == "image/png"
+
+
+def test_prepare_image_for_api_downscales_oversized_images(tmp_path):
+    # A noisy/textured source, not a flat color — a solid-color PNG already
+    # compresses losslessly to a few bytes, which would make the "smaller
+    # than the original" assertion below meaningless (real uploaded photos
+    # always have this kind of texture).
+    path = tmp_path / "huge.png"
+    size = (4000, 3000)
+    canvas = Image.merge(
+        "RGB", [Image.effect_noise(size, 50) for _ in range(3)]
+    )
+    canvas.save(path)
+
+    data, mime_type = prepare_image_for_api(path)
+
+    assert mime_type == "image/jpeg"
+    with Image.open(io.BytesIO(data)) as resized:
+        assert resized.size == (1568, 1176)
+    assert len(data) < len(path.read_bytes())
+
+
+def test_prepare_image_for_api_preserves_aspect_ratio_for_tall_source(tmp_path):
+    path = tmp_path / "tall.png"
+    Image.new("RGB", (2000, 6000), color=(10, 20, 30)).save(path)
+
+    _, mime_type = prepare_image_for_api(path)
+
+    data, _ = prepare_image_for_api(path)
+    with Image.open(io.BytesIO(data)) as resized:
+        assert resized.size == (523, 1568)
+    assert mime_type == "image/jpeg"
+
+
+def test_is_near_duplicate_image_does_not_flag_images_that_merely_share_a_plain_background(tmp_path):
+    """Regression guard: a global-average-hash approach was tried first and
+    normalized each image against its own mean brightness, so two visually
+    distinct photos that both use a plain/uniform commercial background
+    (exactly the style this app's prompts request) collapsed to the same
+    hash and were wrongly flagged as duplicates. A composited image with a
+    large plain background plus a small distinct foreground region must not
+    be flagged as a near-duplicate of an unrelated solid-color swatch."""
+    plain_background_with_subject = tmp_path / "composite.png"
+    canvas = Image.new("RGB", (800, 500), color=(245, 240, 235))
+    canvas.paste(Image.new("RGB", (60, 60), color=(255, 0, 0)), (20, 20))
+    canvas.save(plain_background_with_subject)
+
+    solid_swatch = tmp_path / "swatch.png"
+    Image.new("RGB", (4, 4), color=(255, 0, 0)).save(solid_swatch)
+
+    assert is_near_duplicate_image(plain_background_with_subject, solid_swatch) is False

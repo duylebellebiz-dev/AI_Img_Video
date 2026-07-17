@@ -193,12 +193,18 @@ def process_batch_job(job_id: str) -> None:
                     for other_future in futures:
                         other_future.cancel()
                 else:
-                    # Even after exhausting retries we keep the last attempt's image
-                    # and row instead of discarding it, so progress_completed / the
-                    # ZIP still add up to num_images — a human just needs to review it.
+                    # The DB row (and its last-attempt file on disk) is kept even
+                    # for a failing image, for cost/debugging history — but a
+                    # failing image is never uploaded or handed to the user: only
+                    # images that clear quality_pass_threshold are surfaced via
+                    # the API or included in the ZIP export. See
+                    # _to_status_out in routers/batch.py for the matching filter.
+                    # progress_completed still counts every attempted image
+                    # (pass or fail) so the progress bar reaches num_images.
                     image.status = "passed" if outcome.result.passed else "needs_review"
-                    storage.upload(outcome.result.image_path)
-                    generated_paths.append(outcome.result.image_path)
+                    if outcome.result.passed:
+                        storage.upload(outcome.result.image_path)
+                        generated_paths.append(outcome.result.image_path)
                     job.progress_completed += 1
                 db.commit()
 

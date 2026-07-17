@@ -3,6 +3,7 @@ import ImageDropzone from "./ImageDropzone";
 import PromptTemplates from "./PromptTemplates";
 import SizeSelector from "./SizeSelector";
 import { SparklesIcon, Spinner } from "./icons";
+import { listCampaigns } from "../api";
 
 const DESCRIPTION_TEMPLATES = [
   { label: "Sang trọng mùa hè", text: "summer luxury nail design" },
@@ -105,9 +106,15 @@ export default function UploadForm({ onSubmit, submitting }) {
   const [numImages, setNumImages] = useState(20);
   const [description, setDescription] = useState("summer luxury nail design");
   const [size, setSize] = useState({ width: 1080, height: 1350 });
+  const [campaignId, setCampaignId] = useState("");
+  const [campaigns, setCampaigns] = useState([]);
   const [error, setError] = useState(null);
   const outputPreview = getOutputPreview(designImages.length, poseImages.length, pairingMode, numImages);
   const activeMode = PAIRING_MODES.find((m) => m.value === pairingMode);
+
+  useEffect(() => {
+    listCampaigns().then(setCampaigns).catch(() => setCampaigns([]));
+  }, []);
 
   useEffect(() => {
     if (outputPreview && numImages > outputPreview.modeLimit) {
@@ -145,6 +152,7 @@ export default function UploadForm({ onSubmit, submitting }) {
       description,
       imageWidth: size.width,
       imageHeight: size.height,
+      campaignId: campaignId || undefined,
     });
   }
 
@@ -219,6 +227,24 @@ export default function UploadForm({ onSubmit, submitting }) {
       </div>
 
       <SizeSelector onChange={setSize} />
+
+      {campaigns.length > 0 && (
+        <div>
+          <label className="block text-sm font-medium text-neutral-900">Campaign (optional)</label>
+          <select
+            className="mt-1.5 w-full rounded-lg border border-neutral-300 px-3 py-2.5 text-sm focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/20"
+            value={campaignId}
+            onChange={(e) => setCampaignId(e.target.value)}
+          >
+            <option value="">No campaign</option>
+            {campaigns.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
         <div>

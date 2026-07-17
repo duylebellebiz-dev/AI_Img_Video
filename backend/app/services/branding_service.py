@@ -13,8 +13,12 @@ from app.models.db_models import SalonBranding
 from app.services.storage_service import StorageService
 
 
-def get_logo_path(db: Session) -> Path | None:
-    branding = db.get(SalonBranding, SalonBranding.SINGLETON_ID)
+def _get_branding(db: Session, user_id: str) -> SalonBranding | None:
+    return db.query(SalonBranding).filter(SalonBranding.user_id == user_id).first()
+
+
+def get_logo_path(db: Session, user_id: str) -> Path | None:
+    branding = _get_branding(db, user_id)
     if branding is None or not branding.logo_path:
         return None
     path = Path(branding.logo_path)
@@ -22,11 +26,11 @@ def get_logo_path(db: Session) -> Path | None:
     return path if path.exists() else None
 
 
-def set_logo(db: Session, storage: StorageService, upload_file: UploadFile) -> Path:
-    logo_path = storage.save_logo(upload_file)
-    branding = db.get(SalonBranding, SalonBranding.SINGLETON_ID)
+def set_logo(db: Session, user_id: str, storage: StorageService, upload_file: UploadFile) -> Path:
+    logo_path = storage.save_logo(user_id, upload_file)
+    branding = _get_branding(db, user_id)
     if branding is None:
-        branding = SalonBranding(id=SalonBranding.SINGLETON_ID, logo_path=str(logo_path))
+        branding = SalonBranding(user_id=user_id, logo_path=str(logo_path))
         db.add(branding)
     else:
         branding.logo_path = str(logo_path)

@@ -1,5 +1,5 @@
 import { downloadUrl, mediaUrl } from "../api";
-import { AlertIcon, CheckCircleIcon, DownloadIcon, Spinner, XCircleIcon } from "./icons";
+import { AlertIcon, CheckCircleIcon, DownloadIcon, Spinner } from "./icons";
 
 const STATUS_STYLES = {
   pending: "bg-neutral-100 text-neutral-600",
@@ -97,21 +97,12 @@ export default function JobStatus({ job, cancelling, onCancel }) {
                   {img.design_filename} + {img.pose_filename}
                 </p>
                 <div className="mt-1.5 flex items-center justify-between">
-                  <span
-                    className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 font-medium ${
-                      img.passed ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"
-                    }`}
-                  >
-                    {img.passed ? <CheckCircleIcon className="h-3 w-3" /> : <XCircleIcon className="h-3 w-3" />}
+                  <span className="inline-flex items-center gap-1 rounded bg-emerald-100 px-1.5 py-0.5 font-medium text-emerald-700">
+                    <CheckCircleIcon className="h-3 w-3" />
                     {img.score ?? "-"} pts
                   </span>
                   <span className="text-neutral-400">attempt {img.attempts || 1}</span>
                 </div>
-                {img.status === "needs_review" && (
-                  <p className="mt-1.5 rounded bg-amber-100 px-1.5 py-0.5 text-center font-medium text-amber-800">
-                    Needs manual review
-                  </p>
-                )}
               </div>
             </div>
           ))}

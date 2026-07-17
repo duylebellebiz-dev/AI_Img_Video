@@ -1,3 +1,4 @@
+import shutil
 from pathlib import Path
 
 from app.config import Settings
@@ -7,6 +8,21 @@ from app.services.quality_service import QualityService, _build_retry_feedback
 
 def _settings(**overrides) -> Settings:
     return Settings(anthropic_api_key="", gemini_api_key="", **overrides)
+
+
+def test_score_image_breakdown_includes_pose_fidelity(tmp_path, tiny_png_bytes):
+    """pose_fidelity is the criterion that catches a compositing failure a
+    single-image judge would otherwise miss: an output that's actually an
+    unedited copy of the design reference can still look like a perfectly
+    fine, well-lit manicure photo on its own — nothing about "anatomy" or
+    "nail_accuracy" alone flags that it's the wrong hand/pose entirely."""
+    path = tmp_path / "img.png"
+    path.write_bytes(tiny_png_bytes)
+
+    quality = QualityService(_settings())
+    _, breakdown = quality.score_image(path)
+
+    assert "pose_fidelity" in breakdown
 
 
 def test_mock_scoring_is_deterministic_for_same_bytes(tmp_path, tiny_png_bytes):
@@ -76,6 +92,185 @@ def test_retries_produce_different_mock_images(tmp_path, tiny_png_bytes):
     assert out1.read_bytes() != out2.read_bytes()
 
 
+def test_generate_with_quality_gate_retries_when_output_is_a_near_duplicate_of_an_input(
+    tmp_path, tiny_png_bytes, monkeypatch
+):
+    """Regression guard for the bug where Gemini sometimes returned one of
+    the two reference images almost unchanged instead of merging them. That
+    must be caught and retried automatically, without ever handing the
+    vision judge a near-copy of an input to score as if it were a real
+    generation attempt."""
+    design = tmp_path / "d.png"
+    pose = tmp_path / "p.png"
+    design.write_bytes(tiny_png_bytes)
+    pose.write_bytes(tiny_png_bytes)
+    out = tmp_path / "out.png"
+
+    settings = _settings(quality_pass_threshold=0, quality_max_retries=3)
+    quality = QualityService(settings)
+    image_service = ImageService(settings)
+
+    # Attempt 1 "fails" by literally copying the pose reference back out
+    # (simulating the observed Gemini bug); attempt 2 behaves normally.
+    real_generate_image = image_service.generate_image
+    calls = {"n": 0}
+
+    def fake_generate_image(design_path, pose_path, prompt, variation, out_path, attempt=1, **kwargs):
+        calls["n"] += 1
+        if attempt == 1:
+            shutil.copyfile(pose_path, out_path)
+            return out_path, "image/png"
+        return real_generate_image(design_path, pose_path, prompt, variation, out_path, attempt=attempt, **kwargs)
+
+    monkeypatch.setattr(image_service, "generate_image", fake_generate_image)
+
+    score_calls: list[Path] = []
+    real_score_image = quality.score_image
+
+    def tracking_score_image(path, design_path=None, pose_path=None):
+        score_calls.append(path)
+        return real_score_image(path, design_path, pose_path)
+
+    monkeypatch.setattr(quality, "score_image", tracking_score_image)
+
+    result = quality.generate_with_quality_gate(image_service, design, pose, "base prompt", out, variation=1)
+
+    assert calls["n"] == 2
+    assert score_calls == [out]  # the near-duplicate attempt 1 image was never sent to the judge
+    assert result.attempt == 2
+    assert "returned the pose reference image almost unchanged" in result.prompt_used
+
+
+def test_near_duplicate_retries_even_when_quality_max_retries_is_zero(tmp_path, tiny_png_bytes, monkeypatch):
+    """near_duplicate_max_retries is independent of quality_max_retries: a
+    compositing failure (Gemini echoing a reference image back unchanged)
+    must still get a corrective retry even when ordinary low-score retries
+    are disabled for cost reasons."""
+    design = tmp_path / "d.png"
+    pose = tmp_path / "p.png"
+    design.write_bytes(tiny_png_bytes)
+    pose.write_bytes(tiny_png_bytes)
+    out = tmp_path / "out.png"
+
+    settings = _settings(quality_pass_threshold=0, quality_max_retries=0, near_duplicate_max_retries=2)
+    quality = QualityService(settings)
+    image_service = ImageService(settings)
+
+    real_generate_image = image_service.generate_image
+    calls = {"n": 0}
+
+    def fake_generate_image(design_path, pose_path, prompt, variation, out_path, attempt=1, **kwargs):
+        calls["n"] += 1
+        if attempt == 1:
+            shutil.copyfile(pose_path, out_path)
+            return out_path, "image/png"
+        return real_generate_image(design_path, pose_path, prompt, variation, out_path, attempt=attempt, **kwargs)
+
+    monkeypatch.setattr(image_service, "generate_image", fake_generate_image)
+
+    result = quality.generate_with_quality_gate(image_service, design, pose, "base prompt", out, variation=1)
+
+    assert calls["n"] == 2
+    assert result.attempt == 2
+    assert result.passed is True
+
+
+def test_near_duplicate_retry_budget_is_exhausted_independently(tmp_path, tiny_png_bytes, monkeypatch):
+    """If every attempt is a near-duplicate, retrying must still stop at
+    1 + near_duplicate_max_retries rather than looping forever."""
+    design = tmp_path / "d.png"
+    pose = tmp_path / "p.png"
+    design.write_bytes(tiny_png_bytes)
+    pose.write_bytes(tiny_png_bytes)
+    out = tmp_path / "out.png"
+
+    settings = _settings(quality_pass_threshold=0, quality_max_retries=0, near_duplicate_max_retries=2)
+    quality = QualityService(settings)
+    image_service = ImageService(settings)
+
+    def always_near_duplicate(design_path, pose_path, prompt, variation, out_path, attempt=1, **kwargs):
+        shutil.copyfile(pose_path, out_path)
+        return out_path, "image/png"
+
+    monkeypatch.setattr(image_service, "generate_image", always_near_duplicate)
+
+    result = quality.generate_with_quality_gate(image_service, design, pose, "base prompt", out, variation=1)
+
+    assert result.attempt == 1 + settings.near_duplicate_max_retries
+    assert result.passed is False
+
+
+def test_hard_failure_score_retries_even_when_quality_max_retries_is_zero(tmp_path, tiny_png_bytes, monkeypatch):
+    """Regression guard for a real production case: is_near_duplicate_image's
+    pixel-diff check can miss a genuine compositing failure (it isn't a
+    reliable discriminator — a good composite and a bad near-copy scored
+    similar diff values in production data). When the vision judge itself
+    scores an attempt catastrophically low, that must still draw from the
+    near_duplicate_max_retries budget and retry, even though it's an
+    ordinary quality_max_retries=0 (no-retry) low score by the general rule."""
+    design = tmp_path / "d.png"
+    pose = tmp_path / "p.png"
+    design.write_bytes(tiny_png_bytes)
+    pose.write_bytes(tiny_png_bytes)
+    out = tmp_path / "out.png"
+
+    settings = _settings(
+        quality_pass_threshold=80,
+        quality_max_retries=0,
+        near_duplicate_max_retries=2,
+        quality_hard_failure_threshold=30,
+    )
+    quality = QualityService(settings)
+    image_service = ImageService(settings)
+
+    responses = iter(
+        [
+            (10.0, {"anatomy": 10, "pose_fidelity": 10, "nail_accuracy": 10, "lighting": 10, "background": 10, "realism": 10, "marketing_quality": 10}),
+            (90.0, {"anatomy": 90, "pose_fidelity": 90, "nail_accuracy": 90, "lighting": 90, "background": 90, "realism": 90, "marketing_quality": 90}),
+        ]
+    )
+    monkeypatch.setattr(quality, "score_image", lambda path, design_path=None, pose_path=None: next(responses))
+
+    result = quality.generate_with_quality_gate(image_service, design, pose, "base prompt", out, variation=1)
+
+    assert result.attempt == 2
+    assert result.passed is True
+
+
+def test_ordinary_low_score_does_not_retry_when_quality_max_retries_is_zero(tmp_path, tiny_png_bytes, monkeypatch):
+    """A mediocre-but-not-catastrophic score (above quality_hard_failure_threshold)
+    must respect quality_max_retries=0 and NOT consume the near-duplicate
+    retry budget — only a genuinely broken attempt should draw from it."""
+    design = tmp_path / "d.png"
+    pose = tmp_path / "p.png"
+    design.write_bytes(tiny_png_bytes)
+    pose.write_bytes(tiny_png_bytes)
+    out = tmp_path / "out.png"
+
+    settings = _settings(
+        quality_pass_threshold=80,
+        quality_max_retries=0,
+        near_duplicate_max_retries=2,
+        quality_hard_failure_threshold=30,
+    )
+    quality = QualityService(settings)
+    image_service = ImageService(settings)
+
+    monkeypatch.setattr(
+        quality,
+        "score_image",
+        lambda path, design_path=None, pose_path=None: (
+            65.0,
+            {"anatomy": 70, "pose_fidelity": 70, "nail_accuracy": 55, "lighting": 70, "background": 70, "realism": 70, "marketing_quality": 55},
+        ),
+    )
+
+    result = quality.generate_with_quality_gate(image_service, design, pose, "base prompt", out, variation=1)
+
+    assert result.attempt == 1
+    assert result.passed is False
+
+
 def test_build_retry_feedback_is_empty_when_nothing_is_weak():
     breakdown = {"anatomy": 90, "nail_accuracy": 90, "lighting": 90, "background": 90, "realism": 90, "marketing_quality": 90}
     assert _build_retry_feedback(breakdown, threshold=80) == ""
@@ -108,7 +303,7 @@ def test_generate_with_quality_gate_appends_feedback_to_retry_prompt(tmp_path, t
             (95.0, {"anatomy": 95, "nail_accuracy": 95, "lighting": 95, "background": 95, "realism": 95, "marketing_quality": 95}),
         ]
     )
-    monkeypatch.setattr(quality, "score_image", lambda path: next(responses))
+    monkeypatch.setattr(quality, "score_image", lambda path, design_path=None, pose_path=None: next(responses))
 
     result = quality.generate_with_quality_gate(image_service, design, pose, "base prompt", out, variation=1)
 

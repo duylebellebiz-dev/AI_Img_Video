@@ -1,9 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import UploadForm from "./components/UploadForm";
 import JobStatus from "./components/JobStatus";
+import RecentBatchJobs from "./components/RecentBatchJobs";
 import PhotoEditor from "./components/PhotoEditor";
-import { AlertIcon, ImagesIcon, SparklesIcon } from "./components/icons";
-import { cancelBatchJob, createBatchJob, getBatchJob } from "./api";
+import LoginGate from "./components/LoginGate";
+import NotificationBell from "./components/NotificationBell";
+import SocialScheduling from "./components/SocialScheduling";
+import CampaignManager from "./components/CampaignManager";
+import Dashboard from "./components/Dashboard";
+import { AlertIcon, CalendarIcon, ChartIcon, FolderIcon, ImagesIcon, SparklesIcon } from "./components/icons";
+import { cancelBatchJob, createBatchJob, getBatchJob, getCurrentUser, logout } from "./api";
 
 const POLL_INTERVAL_MS = 2000;
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
@@ -12,10 +18,40 @@ const MAX_POLL_ERRORS = 3;
 const TABS = [
   { key: "batch", label: "Batch Generator", icon: ImagesIcon },
   { key: "edit", label: "Photo Editor", icon: SparklesIcon },
+  { key: "social", label: "Social & Scheduling", icon: CalendarIcon },
+  { key: "campaigns", label: "Campaigns", icon: FolderIcon },
+  { key: "dashboard", label: "Dashboard", icon: ChartIcon },
 ];
 
 function App() {
-  const [tab, setTab] = useState("batch");
+  const [authChecked, setAuthChecked] = useState(false);
+  const [user, setUser] = useState(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        setUser(await getCurrentUser());
+      } catch {
+        // not logged in yet — LoginGate will be shown
+      } finally {
+        setAuthChecked(true);
+      }
+    })();
+  }, []);
+
+  if (!authChecked) return null;
+  if (!user) return <LoginGate onLoggedIn={setUser} />;
+
+  return <AuthenticatedApp user={user} onLogout={() => setUser(null)} />;
+}
+
+function initialTab() {
+  const requested = new URLSearchParams(window.location.search).get("tab");
+  return TABS.some((t) => t.key === requested) ? requested : "batch";
+}
+
+function AuthenticatedApp({ user, onLogout }) {
+  const [tab, setTab] = useState(initialTab);
   const [submitting, setSubmitting] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [job, setJob] = useState(null);
@@ -26,6 +62,13 @@ function App() {
 
   useEffect(() => {
     return () => clearInterval(pollRef.current);
+  }, []);
+
+  useEffect(() => {
+    if (window.location.search) {
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function handleSubmit(payload) {
@@ -90,10 +133,21 @@ function App() {
       <header className="border-b border-neutral-200/80 bg-white/80 backdrop-blur">
         <div className="mx-auto flex max-w-5xl items-center gap-3 px-4 py-4 sm:px-6">
           <img src="/favicon.svg" alt="" className="h-9 w-9" />
-          <div>
+          <div className="flex-1">
             <p className="text-base leading-tight font-semibold text-neutral-900">NailSocial AI</p>
             <p className="text-xs text-neutral-500">AI marketing studio for nail salons</p>
           </div>
+          <NotificationBell />
+          <button
+            type="button"
+            onClick={async () => {
+              await logout();
+              onLogout();
+            }}
+            className="rounded-lg px-3 py-2 text-sm font-medium text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-800"
+          >
+            {user?.salon_name ? `Sign out (${user.salon_name})` : "Sign out"}
+          </button>
         </div>
       </header>
 
@@ -132,10 +186,24 @@ function App() {
           )}
 
           <JobStatus job={job} cancelling={cancelling} onCancel={handleCancel} />
+
+          <RecentBatchJobs onSelectJob={setJob} />
         </div>
 
         <div className={`mt-6 ${tab === "edit" ? "" : "hidden"}`}>
           <PhotoEditor />
+        </div>
+
+        <div className={`mt-6 ${tab === "social" ? "" : "hidden"}`}>
+          <SocialScheduling />
+        </div>
+
+        <div className={`mt-6 ${tab === "campaigns" ? "" : "hidden"}`}>
+          <CampaignManager />
+        </div>
+
+        <div className={`mt-6 ${tab === "dashboard" ? "" : "hidden"}`}>
+          <Dashboard />
         </div>
       </main>
     </div>

@@ -5,27 +5,28 @@ from fastapi.testclient import TestClient
 @pytest.fixture
 def client():
     from app import main as main_module
-    from app.config import get_settings
     from app.database import Base, SessionLocal, engine
     from app.models.db_models import SalonBranding
+    from app.services.auth_service import SESSION_COOKIE_NAME, create_session_token
+    from conftest import _make_user
 
     Base.metadata.create_all(bind=engine)
 
-    # SalonBranding is a singleton row, unlike the UUID-keyed rows other test
-    # files use, so it can leak state across test files sharing the same
-    # on-disk SQLite DB. Reset it before each test regardless of run order.
+    user = _make_user("salon", "Test Salon")
+
+    # SalonBranding is per-tenant, but this on-disk SQLite DB is shared
+    # across test files run in the same session — clear any leftover row
+    # for this fresh user_id regardless of run order (there shouldn't be
+    # one, since user_id is brand new, but keeps the fixture idempotent).
     session = SessionLocal()
     try:
-        branding = session.get(SalonBranding, SalonBranding.SINGLETON_ID)
-        if branding is not None:
-            session.delete(branding)
-            session.commit()
+        session.query(SalonBranding).filter(SalonBranding.user_id == user.id).delete()
+        session.commit()
     finally:
         session.close()
-    for existing in (get_settings().storage_path / "branding").glob("logo.*"):
-        existing.unlink(missing_ok=True)
 
     with TestClient(main_module.app) as test_client:
+        test_client.cookies.set(SESSION_COOKIE_NAME, create_session_token(user.id))
         yield test_client
 
 

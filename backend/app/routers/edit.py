@@ -15,12 +15,20 @@ from app.models.schemas import (
 )
 from app.services import branding_service
 from app.services.agent_service import AgentService
+from app.services.auth_service import get_current_user_id
 from app.services.image_service import ImageService
 from app.services.media_utils import apply_watermark, validate_size
 from app.services.storage_service import StorageService
 from app.tasks.edit_tasks import process_edit_job
 
 router = APIRouter(prefix="/api/edit", tags=["edit"])
+
+
+def _get_owned_edit_job(db: Session, job_id: str, user_id: str) -> EditJob:
+    job = db.get(EditJob, job_id)
+    if job is None or job.user_id != user_id:
+        raise HTTPException(status_code=404, detail="Edit job not found")
+    return job
 
 
 def _owning_job_path_prefix(edit: ImageEdit) -> str:
@@ -81,6 +89,7 @@ def create_image_edit(
     apply_logo: bool = Form(False),
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
+    user_id: str = Depends(get_current_user_id),
 ) -> ImageEditResponse:
     prompt = prompt.strip()
     if not prompt:
@@ -91,7 +100,7 @@ def create_image_edit(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    if apply_logo and branding_service.get_logo_path(db) is None:
+    if apply_logo and branding_service.get_logo_path(db, user_id) is None:
         raise HTTPException(status_code=422, detail="No salon logo has been uploaded yet")
 
     storage = StorageService(settings)
@@ -99,6 +108,7 @@ def create_image_edit(
     image_service = ImageService(settings)
 
     edit = ImageEdit(
+        user_id=user_id,
         prompt=prompt,
         original_filename=image.filename or "upload",
         image_width=image_width,
@@ -120,7 +130,7 @@ def create_image_edit(
         )
 
         if apply_logo:
-            logo_path = branding_service.get_logo_path(db)
+            logo_path = branding_service.get_logo_path(db, user_id)
             if logo_path is not None:
                 apply_watermark(generated_path, logo_path)
 
@@ -147,6 +157,7 @@ def create_edit_batch_job(
     apply_logo: bool = Form(False),
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
+    user_id: str = Depends(get_current_user_id),
 ) -> EditJobCreateResponse:
     prompt = prompt.strip()
     if not prompt:
@@ -164,11 +175,12 @@ def create_edit_batch_job(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    if apply_logo and branding_service.get_logo_path(db) is None:
+    if apply_logo and branding_service.get_logo_path(db, user_id) is None:
         raise HTTPException(status_code=422, detail="No salon logo has been uploaded yet")
 
     storage = StorageService(settings)
     job = EditJob(
+        user_id=user_id,
         prompt=prompt,
         image_width=image_width,
         image_height=image_height,
@@ -185,6 +197,7 @@ def create_edit_batch_job(
             original_path = storage.save_upload(job.id, "upload", image)
             db.add(
                 ImageEdit(
+                    user_id=user_id,
                     edit_job_id=job.id,
                     prompt=prompt,
                     original_filename=image.filename or "upload",
@@ -209,18 +222,18 @@ def create_edit_batch_job(
 
 
 @router.get("/batch/{job_id}", response_model=EditJobStatusOut)
-def get_edit_batch_job(job_id: str, db: Session = Depends(get_db)) -> EditJobStatusOut:
-    job = db.get(EditJob, job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Edit job not found")
+def get_edit_batch_job(
+    job_id: str, db: Session = Depends(get_db), user_id: str = Depends(get_current_user_id)
+) -> EditJobStatusOut:
+    job = _get_owned_edit_job(db, job_id, user_id)
     return _to_job_out(job)
 
 
 @router.post("/batch/{job_id}/cancel", response_model=EditJobCancelResponse)
-def cancel_edit_batch_job(job_id: str, db: Session = Depends(get_db)) -> EditJobCancelResponse:
-    job = db.get(EditJob, job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Edit job not found")
+def cancel_edit_batch_job(
+    job_id: str, db: Session = Depends(get_db), user_id: str = Depends(get_current_user_id)
+) -> EditJobCancelResponse:
+    job = _get_owned_edit_job(db, job_id, user_id)
     if job.status in {"completed", "failed", "cancelled"}:
         raise HTTPException(status_code=409, detail=f"Edit job is already {job.status}")
 
@@ -238,11 +251,12 @@ def cancel_edit_batch_job(job_id: str, db: Session = Depends(get_db)) -> EditJob
 
 @router.get("/batch/{job_id}/download")
 def download_edit_batch_job(
-    job_id: str, db: Session = Depends(get_db), settings: Settings = Depends(get_settings)
+    job_id: str,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    user_id: str = Depends(get_current_user_id),
 ) -> FileResponse:
-    job = db.get(EditJob, job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Edit job not found")
+    job = _get_owned_edit_job(db, job_id, user_id)
     if not job.zip_path:
         raise HTTPException(status_code=409, detail="Export is not ready yet")
     zip_path = StorageService(settings).ensure_local(Path(job.zip_path))
@@ -252,8 +266,10 @@ def download_edit_batch_job(
 
 
 @router.get("/{edit_id}", response_model=ImageEditResponse)
-def get_image_edit(edit_id: str, db: Session = Depends(get_db)) -> ImageEditResponse:
+def get_image_edit(
+    edit_id: str, db: Session = Depends(get_db), user_id: str = Depends(get_current_user_id)
+) -> ImageEditResponse:
     edit = db.get(ImageEdit, edit_id)
-    if edit is None:
+    if edit is None or edit.user_id != user_id:
         raise HTTPException(status_code=404, detail="Image edit not found")
     return _to_out(edit)

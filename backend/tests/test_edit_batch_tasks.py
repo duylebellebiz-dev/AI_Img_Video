@@ -13,17 +13,26 @@ from PIL import Image
 @pytest.fixture
 def db_session():
     from app.database import Base, SessionLocal, engine
+    from app.models.db_models import SalonBranding
 
     Base.metadata.create_all(bind=engine)
     session = SessionLocal()
+    # SalonBranding rows use a fixed "test-user" id across runs (see
+    # test_batch_edit_applies_watermark_when_requested below) and this file's
+    # sqlite DB persists across test runs — without clearing it first, an
+    # older run's row (pointing at a since-deleted pytest tmp_path logo file)
+    # can be the one a plain `.first()` lookup returns.
+    session.query(SalonBranding).delete()
+    session.commit()
     yield session
     session.close()
 
 
-def _make_job(db_session, tiny_png_bytes, tmp_path, n_images=3, apply_logo=False):
+def _make_job(db_session, tiny_png_bytes, tmp_path, n_images=3, apply_logo=False, user_id="test-user"):
     from app.models.db_models import EditJob, ImageEdit
 
     job = EditJob(
+        user_id=user_id,
         prompt="brighten the photo",
         status="pending",
         progress_total=n_images,
@@ -139,7 +148,7 @@ def test_batch_edit_applies_watermark_when_requested(db_session, tiny_png_bytes,
 
     logo_path = tmp_path / "logo.png"
     Image.new("RGBA", (200, 80), color=(255, 0, 0, 255)).save(logo_path)
-    db_session.merge(SalonBranding(id=SalonBranding.SINGLETON_ID, logo_path=str(logo_path)))
+    db_session.add(SalonBranding(user_id="test-user", logo_path=str(logo_path)))
     db_session.commit()
 
     job = _make_job(db_session, tiny_png_bytes, tmp_path, n_images=1, apply_logo=True)

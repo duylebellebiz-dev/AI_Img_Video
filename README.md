@@ -8,7 +8,7 @@ are intentionally out of scope for this phase.
 
 - Backend: FastAPI + SQLAlchemy, Python 3.11 (batch/edit jobs run via FastAPI `BackgroundTasks`, no separate worker process)
 - DB: PostgreSQL (already running locally as a Windows service)
-- Storage: local disk by default; Cloudflare R2 (S3-compatible) as the durable copy when `R2_*` env vars are set — needed on hosts without a persistent disk
+- Storage: local disk by default; Cloudinary as the durable copy when `CLOUDINARY_*` env vars are set — needed on hosts without a persistent disk
 - Frontend: React + Vite + Tailwind v4
 
 ## One-time setup

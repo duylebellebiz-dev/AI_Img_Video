@@ -30,3 +30,6 @@ frontend/dist/
 AGENTS.md
 CLAUDE.md
 Idea.txt
+
+# Local dev tool for testing Facebook OAuth (HTTPS tunnel to localhost)
+ngrok.exe

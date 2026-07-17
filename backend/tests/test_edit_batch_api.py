@@ -7,6 +7,8 @@ def client(monkeypatch):
     from app import main as main_module
     from app.database import Base, engine
     from app.routers import edit as edit_router
+    from app.services.auth_service import SESSION_COOKIE_NAME, create_session_token
+    from conftest import _make_user
 
     Base.metadata.create_all(bind=engine)
 
@@ -14,7 +16,9 @@ def client(monkeypatch):
     # pipeline itself is covered directly in test_edit_batch_tasks.py.
     monkeypatch.setattr(edit_router, "process_edit_job", lambda job_id: None)
 
+    user = _make_user("salon", "Test Salon")
     with TestClient(main_module.app) as test_client:
+        test_client.cookies.set(SESSION_COOKIE_NAME, create_session_token(user.id))
         yield test_client
 
 

@@ -10,25 +10,50 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg2://nailsocial:change-me-locally@127.0.0.1:5432/nailsocial"
 
     anthropic_api_key: str = ""
-    anthropic_model: str = "claude-sonnet-5"
+    anthropic_model: str = "claude-haiku-4-5"
 
     gemini_api_key: str = ""
     gemini_image_model: str = "gemini-2.5-flash-image"
 
     storage_root: str = "./storage"
 
-    # Object storage (Cloudflare R2, S3-compatible) — the durable copy of
-    # everything under storage_root. Needed because free-tier web hosts don't
-    # give you a persistent disk: local storage_root is just a scratch/cache
-    # directory that can be wiped by a restart or scale-to-zero cycle. Leave
-    # blank to run local-disk-only (fine for local dev).
-    r2_account_id: str = ""
-    r2_access_key_id: str = ""
-    r2_secret_access_key: str = ""
-    r2_bucket_name: str = ""
+    # Object storage (Cloudinary) — the durable copy of everything under
+    # storage_root. Needed because free-tier web hosts don't give you a
+    # persistent disk: local storage_root is just a scratch/cache directory
+    # that can be wiped by a restart or scale-to-zero cycle. Leave blank to
+    # run local-disk-only (fine for local dev).
+    cloudinary_cloud_name: str = ""
+    cloudinary_api_key: str = ""
+    cloudinary_api_secret: str = ""
 
     quality_pass_threshold: int = 80
-    quality_max_retries: int = 3
+    # 0 = no auto-regenerate on a failed quality score — generate once, and a
+    # failing score just lands the image in "needs_review" status for a human
+    # to look at instead of spending another paid Gemini generate + Claude
+    # score attempting to fix it automatically.
+    quality_max_retries: int = 0
+    # Separate, smaller retry budget reserved for known, usually-correctable
+    # Gemini compositing bugs — as opposed to an ordinary mediocre score,
+    # which is a "have a human look at it" outcome, not a "spend another
+    # paid attempt trying to fix it" one. Two independent detectors feed
+    # this same budget:
+    #  1. is_near_duplicate_image — a cheap pixel-diff check that catches
+    #     Gemini returning one reference image back almost byte-for-byte
+    #     unchanged.
+    #  2. quality_hard_failure_threshold below — pixel-diff alone isn't
+    #     reliable (in production data, genuinely good composites can score
+    #     a similar diff to a genuine near-duplicate), so a catastrophically
+    #     low vision-judge score is treated as the same known failure mode,
+    #     since _VISION_RUBRIC already scores a compositing failure this low
+    #     on purpose (see its "CRITICAL COMPOSITING CHECK" clause).
+    near_duplicate_max_retries: int = 2
+    # A score below this is treated as a hard compositing failure (case 2
+    # above), not an ordinary "needs more polish" low score — e.g. an
+    # observed real failure scored every criterion at 10/100, while ordinary
+    # below-threshold images cluster in the 60-79 range. Deliberately well
+    # below quality_pass_threshold so this never fires on a merely mediocre
+    # image, only a clearly broken one.
+    quality_hard_failure_threshold: int = 30
 
     batch_min_images: int = 1
     batch_max_images: int = 100
@@ -38,6 +63,59 @@ class Settings(BaseSettings):
     batch_concurrency: int = 4
 
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
+
+    # Facebook/Instagram (Meta Graph API) auto-posting. Leave blank to run in
+    # mock mode (simulated OAuth/publish calls) so the flow works end to end
+    # without a real Meta App — see app/services/meta_service.py.
+    facebook_app_id: str = ""
+    facebook_app_secret: str = ""
+    facebook_redirect_uri: str = "http://localhost:8000/api/social/connect/facebook/callback"
+
+    # Fernet key (generate with `Fernet.generate_key()`) used to encrypt
+    # SocialAccount access tokens at rest. Required once a real Facebook App
+    # is connected; mock mode doesn't store real tokens.
+    token_encryption_key: str = ""
+
+    # Signs the httpOnly session cookie issued on login/register (see
+    # auth_service.py). Every tenant's session is signed with this one key.
+    session_secret_key: str = "dev-only-insecure-session-secret-change-me"
+
+    # How long before a scheduled post's target datetime the content
+    # generation sweep should produce the caption/hashtags for review.
+    content_lead_time_hours: int = 24
+
+    # Estimated per-unit pricing for the usage/cost dashboard — these are
+    # placeholders and must be checked against current published Anthropic/
+    # Gemini pricing before being relied on for a real budget figure.
+    anthropic_input_price_per_million_usd: float = 1.0
+    anthropic_output_price_per_million_usd: float = 5.0
+    gemini_image_price_per_image_usd: float = 0.03
+    # 0 = no budget configured; the usage dashboard shows a running total
+    # instead of a budget meter bar.
+    monthly_budget_usd: float = 0.0
+
+    # This backend's own publicly-reachable base URL (e.g. the Render URL).
+    # Meta Graph API fetches the image by URL when publishing, so it must be
+    # able to reach it over the internet — not needed in mock mode, and not
+    # satisfied by http://localhost during local development.
+    public_base_url: str = ""
+
+    # Any endpoint that accepts a JSON POST (Slack/Discord incoming webhook,
+    # Zapier/Make catch hook, etc.) — every Notification (content ready for
+    # review, post failed, auto-refill triggered) is also POSTed here so a
+    # salon owner doesn't have to keep the app open to catch it. Leave blank
+    # to only surface notifications in-app (see notification_service.py).
+    notification_webhook_url: str = ""
+
+    # Module: auto-refill content pipeline (opt-in per Campaign — see
+    # Campaign.auto_refill_enabled and auto_refill_service.py). How far ahead
+    # to count "upcoming" scheduled posts, and how few of them must exist
+    # before a campaign is topped up with a new cloned batch job.
+    auto_refill_buffer_days: int = 7
+    auto_refill_min_buffer_posts: int = 3
+    # Minimum time between two auto-refill batch jobs for the same campaign,
+    # so a slow-to-review queue can't trigger runaway paid generation.
+    auto_refill_cooldown_hours: int = 24
 
     @property
     def cors_origin_list(self) -> list[str]:
@@ -58,12 +136,12 @@ class Settings(BaseSettings):
         return bool(self.gemini_api_key)
 
     @property
-    def has_r2(self) -> bool:
-        return bool(self.r2_account_id and self.r2_access_key_id and self.r2_secret_access_key and self.r2_bucket_name)
+    def has_cloudinary(self) -> bool:
+        return bool(self.cloudinary_cloud_name and self.cloudinary_api_key and self.cloudinary_api_secret)
 
     @property
-    def r2_endpoint_url(self) -> str:
-        return f"https://{self.r2_account_id}.r2.cloudflarestorage.com"
+    def has_facebook_credentials(self) -> bool:
+        return bool(self.facebook_app_id and self.facebook_app_secret)
 
 
 @lru_cache

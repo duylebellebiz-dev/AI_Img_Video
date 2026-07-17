@@ -7,6 +7,8 @@ def client(monkeypatch):
     from app import main as main_module
     from app.database import Base, engine
     from app.routers import batch as batch_router
+    from app.services.auth_service import SESSION_COOKIE_NAME, create_session_token
+    from conftest import _make_user
 
     Base.metadata.create_all(bind=engine)
 
@@ -14,7 +16,9 @@ def client(monkeypatch):
     # API-level tests; the worker pipeline is covered by test_batch_tasks.py.
     monkeypatch.setattr(batch_router, "process_batch_job", lambda job_id: None)
 
+    user = _make_user("salon", "Test Salon")
     with TestClient(main_module.app) as test_client:
+        test_client.cookies.set(SESSION_COOKIE_NAME, create_session_token(user.id))
         yield test_client
 
 
@@ -201,3 +205,37 @@ def test_health_endpoint_reports_mock_mode(client):
     body = resp.json()
     assert body["mock_claude"] is True
     assert body["mock_gemini"] is True
+
+
+def test_list_batch_jobs_returns_own_jobs_newest_first(client, tiny_png_bytes):
+    files = _upload_files(tiny_png_bytes)
+    first = client.post("/api/batch", data={"pairing_mode": "one_to_one", "num_images": "1"}, files=files).json()
+    second = client.post("/api/batch", data={"pairing_mode": "one_to_one", "num_images": "1"}, files=files).json()
+
+    resp = client.get("/api/batch")
+    assert resp.status_code == 200, resp.text
+    job_ids = [j["job_id"] for j in resp.json()]
+    assert job_ids[:2] == [second["job_id"], first["job_id"]]
+
+
+def test_list_batch_jobs_does_not_include_generated_images(client, tiny_png_bytes):
+    files = _upload_files(tiny_png_bytes)
+    client.post("/api/batch", data={"pairing_mode": "one_to_one", "num_images": "1"}, files=files)
+
+    resp = client.get("/api/batch")
+    assert "images" not in resp.json()[0]
+
+
+def test_list_batch_jobs_is_scoped_to_the_current_tenant(client, tiny_png_bytes):
+    from app import main as main_module
+    from app.services.auth_service import SESSION_COOKIE_NAME, create_session_token
+    from conftest import _make_user
+
+    files = _upload_files(tiny_png_bytes)
+    client.post("/api/batch", data={"pairing_mode": "one_to_one", "num_images": "1"}, files=files)
+
+    other_user = _make_user("other-salon", "Other Salon")
+    other_client = TestClient(main_module.app)
+    other_client.cookies.set(SESSION_COOKIE_NAME, create_session_token(other_user.id))
+
+    assert other_client.get("/api/batch").json() == []

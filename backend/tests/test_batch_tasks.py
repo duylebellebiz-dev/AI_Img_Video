@@ -59,9 +59,11 @@ def _make_job(db_session, tiny_png_bytes, tmp_path, num_images=3):
     return job
 
 
-def test_unreachable_threshold_marks_needs_review_but_keeps_count(
+def test_unreachable_threshold_discards_failing_images_from_zip_but_keeps_db_row(
     db_session, tiny_png_bytes, tmp_path, settings_override
 ):
+    """A failing image is never handed to the user (not in the ZIP), but its
+    row is kept for cost/debugging history — see batch_tasks.py."""
     from app.models.db_models import BatchJob, GeneratedImage
     from app.tasks.batch_tasks import process_batch_job
 
@@ -75,15 +77,15 @@ def test_unreachable_threshold_marks_needs_review_but_keeps_count(
 
     assert job.status == "completed"
     assert job.progress_completed == job.num_images == 3
-    assert len(images) == 3  # nothing silently discarded
+    assert len(images) == 3  # DB rows kept for audit even though nothing passed
     for img in images:
         assert img.status == "needs_review"
         assert img.passed is False
         assert img.attempts == 1 + 1  # 1 initial + quality_max_retries(1)
-        assert img.generated_path is not None  # last attempt's file is kept
+        assert img.generated_path is not None  # last attempt's file is kept on disk
 
     with zipfile.ZipFile(job.zip_path) as zf:
-        assert len(zf.namelist()) == 3  # ZIP export also matches num_images
+        assert len(zf.namelist()) == 0  # nothing passed -> nothing delivered
 
 
 def test_reachable_threshold_marks_passed(db_session, tiny_png_bytes, tmp_path, settings_override):
@@ -138,8 +140,8 @@ def test_cancel_during_quality_retry_stops_before_next_attempt(
 
     original_score_image = QualityService.score_image
 
-    def cancelling_score(self, image_path):
-        overall, breakdown = original_score_image(self, image_path)
+    def cancelling_score(self, image_path, design_path=None, pose_path=None):
+        overall, breakdown = original_score_image(self, image_path, design_path, pose_path)
         session = SessionLocal()
         try:
             job_row = session.get(type(job), job.id)

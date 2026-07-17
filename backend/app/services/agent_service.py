@@ -5,9 +5,11 @@ the Gemini Image API: composition, lighting, background, commercial nail
 photography style. Claude never generates images itself (see CLAUDE.md #3).
 """
 
+import json
 from math import gcd
 
 from app.config import Settings, get_settings
+from app.services import usage_service
 from app.services.anthropic_utils import extract_text
 
 _NAMED_ASPECT_RATIOS = {
@@ -33,15 +35,22 @@ def _size_hint(width: int | None, height: int | None) -> str:
 
 _SYSTEM_PROMPT = (
     "You are a commercial nail-photography prompt engineer for a nail salon "
-    "marketing platform. Given a short campaign description and a reference "
-    "nail design image plus a hand pose image, write ONE detailed image "
-    "generation prompt for an AI image editor. The prompt must: preserve the "
-    "hand's exact anatomy and pose from the pose reference, replace only the "
-    "nails with the design from the design reference, specify natural/soft "
-    "studio lighting, a minimalist commercial background, and high-end "
-    "advertising photography style. The prompt must explicitly instruct that "
-    "the image contain NO text, letters, numbers, captions, watermarks, or "
-    "logos anywhere in the frame. Output ONLY the prompt text, no preamble."
+    "marketing platform. Given a short campaign description, a hand pose "
+    "reference image, and a nail design reference image, write ONE detailed "
+    "image generation prompt for an AI image editor that will receive both "
+    "reference images as Image 1 (hand pose) and Image 2 (nail design). "
+    "The prompt must be specific and unambiguous, not a vague 'combine these "
+    "images' instruction. It must explicitly state, in these terms: preserve "
+    "the exact hand/finger anatomy, finger positions, camera angle, skin "
+    "tone, lighting, and background from Image 1 unchanged; take ONLY the "
+    "nail polish color/pattern/finish from Image 2 and apply it to the nails "
+    "on the hand from Image 1, without copying Image 2's background, hand, "
+    "or composition; the result must be a new merged photo, never an "
+    "unedited copy of either reference image. It must also specify natural/"
+    "soft studio lighting, a minimalist commercial background, and high-end "
+    "advertising photography style, and explicitly instruct that the image "
+    "contain NO text, letters, numbers, captions, watermarks, or logos "
+    "anywhere in the frame. Output ONLY the prompt text, no preamble."
 )
 
 
@@ -87,6 +96,50 @@ def _mock_edit_prompt(user_prompt: str, filename: str, width: int | None = None,
     )
 
 
+_POST_CONTENT_SYSTEM_PROMPT = (
+    "You are a social media copywriter for a nail salon marketing platform. "
+    "Given a short description of a generated nail photo and the target "
+    "platform, write one engaging caption (2-4 sentences, warm and inviting, "
+    "no emojis spam, a light call to action) and a list of 8-15 relevant "
+    "hashtags (mix of broad and niche, no spaces, no duplicate #). If a list "
+    "of recently-used captions for this same campaign is provided, write "
+    "something clearly different in wording and structure from every one of "
+    "them — never reuse a previous caption verbatim. Respond "
+    "with ONLY a JSON object of the form "
+    '{"caption": "...", "hashtags": ["#tag1", "#tag2"]}, no preamble, no markdown fences.'
+)
+
+_MOCK_CAPTION_TEMPLATES = [
+    "Fresh from the salon chair: {base}. Book your next appointment and let us bring this look to your nails too!",
+    "New in the chair today: {base}. Slide into our booking link if you want this look next!",
+    "Spotlight on {base} — straight from our salon to your feed. Ready to book yours?",
+    "Today's inspiration: {base}. Come see us and make it your own signature look!",
+]
+
+
+def _mock_post_content(image_context: str, platform: str, recent_captions: list[str] | None = None) -> dict:
+    base = image_context.strip() or "a fresh nail design"
+    template = _MOCK_CAPTION_TEMPLATES[len(recent_captions or []) % len(_MOCK_CAPTION_TEMPLATES)]
+    return {
+        "caption": template.format(base=base),
+        "hashtags": [
+            "#nailsalon",
+            "#nailart",
+            "#naildesign",
+            "#manicure",
+            "#nailsofinstagram",
+            "#nailinspo",
+            "#glamnails",
+            f"#{platform.lower()}nails" if platform else "#nails",
+        ],
+    }
+
+
+def _is_duplicate_caption(caption: str, recent_captions: list[str]) -> bool:
+    normalized = " ".join(caption.split()).strip().lower()
+    return any(normalized == " ".join(c.split()).strip().lower() for c in recent_captions)
+
+
 class AgentService:
     def __init__(self, settings: Settings | None = None):
         self.settings = settings or get_settings()
@@ -122,10 +175,16 @@ class AgentService:
         )
         response = self._client.messages.create(
             model=self.settings.anthropic_model,
-            max_tokens=400,
+            # _SYSTEM_PROMPT now spells out the full Image-1/Image-2 preserve
+            # vs. replace contract explicitly, which is a longer ask than the
+            # old version — bumped from 400 to leave headroom so this doesn't
+            # hit the same stop_reason=max_tokens truncation seen on
+            # score_image after its rubric grew similarly.
+            max_tokens=700,
             system=_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_message}],
         )
+        usage_service.record_anthropic_usage("build_prompt", self.settings.anthropic_model, response, self.settings)
         return extract_text(response)
 
     def refine_edit_prompt(
@@ -145,4 +204,68 @@ class AgentService:
             system=_EDIT_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_message}],
         )
+        usage_service.record_anthropic_usage(
+            "refine_edit_prompt", self.settings.anthropic_model, response, self.settings
+        )
         return extract_text(response)
+
+    def generate_post_content(
+        self,
+        image_context: str,
+        salon_context: str,
+        platform: str,
+        recent_captions: list[str] | None = None,
+    ) -> dict:
+        """Generates a caption + hashtag list for an auto-scheduled social
+        post. Returns {"caption": str, "hashtags": list[str]}. Called by
+        scheduler_service ahead of a ScheduledPost's suggested_date; the
+        result always goes to pending_review, never posted directly.
+
+        recent_captions (other posts in the same campaign) are passed to
+        Claude as "avoid repeating this" context. If the result is still an
+        exact duplicate of one of them, regenerate once with a stronger
+        instruction — no further retries, to avoid any risk of a loop."""
+        if self.is_mock:
+            return _mock_post_content(image_context, platform, recent_captions)
+
+        content = self._generate_post_content_once(image_context, salon_context, platform, recent_captions)
+        if recent_captions and _is_duplicate_caption(content["caption"], recent_captions):
+            content = self._generate_post_content_once(
+                image_context, salon_context, platform, recent_captions, retry=True
+            )
+        return content
+
+    def _generate_post_content_once(
+        self,
+        image_context: str,
+        salon_context: str,
+        platform: str,
+        recent_captions: list[str] | None,
+        retry: bool = False,
+    ) -> dict:
+        user_message = (
+            f"Photo description: {image_context}\n"
+            f"Salon context: {salon_context or 'a nail salon'}\n"
+            f"Target platform: {platform}"
+        )
+        if recent_captions:
+            joined = "\n".join(f"- {c}" for c in recent_captions)
+            user_message += f"\n\nRecently used captions for this campaign (do not repeat):\n{joined}"
+        if retry:
+            user_message += "\n\nYour previous attempt exactly duplicated a recent caption. Rewrite it completely differently."
+
+        response = self._client.messages.create(
+            model=self.settings.anthropic_model,
+            max_tokens=400,
+            system=_POST_CONTENT_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": user_message}],
+        )
+        usage_service.record_anthropic_usage(
+            "generate_post_content", self.settings.anthropic_model, response, self.settings
+        )
+        text = extract_text(response)
+        try:
+            data = json.loads(text)
+            return {"caption": data["caption"], "hashtags": list(data["hashtags"])}
+        except (json.JSONDecodeError, KeyError, TypeError) as exc:
+            raise RuntimeError(f"Claude did not return valid post-content JSON: {text!r}") from exc
