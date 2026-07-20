@@ -24,8 +24,11 @@ def _anthropic_cost(input_tokens: int, output_tokens: int, settings: Settings) -
     )
 
 
-def _gemini_cost(image_count: int, settings: Settings) -> float:
-    return image_count * settings.gemini_image_price_per_image_usd
+def _gemini_cost(input_tokens: int, output_tokens: int, settings: Settings) -> float:
+    return (
+        input_tokens / 1_000_000 * settings.gemini_image_input_price_per_million_usd
+        + output_tokens / 1_000_000 * settings.gemini_image_output_price_per_million_usd
+    )
 
 
 def record_anthropic_usage(operation: str, model: str, response, settings: Settings | None = None) -> None:
@@ -69,7 +72,7 @@ def record_gemini_usage(
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 image_count=image_count,
-                estimated_cost_usd=_gemini_cost(image_count, settings),
+                estimated_cost_usd=_gemini_cost(input_tokens or 0, output_tokens or 0, settings),
             )
         )
         db.commit()

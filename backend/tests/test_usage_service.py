@@ -25,7 +25,8 @@ def _settings(**overrides) -> Settings:
     defaults = {
         "anthropic_input_price_per_million_usd": 3.0,
         "anthropic_output_price_per_million_usd": 15.0,
-        "gemini_image_price_per_image_usd": 0.03,
+        "gemini_image_input_price_per_million_usd": 1.0,
+        "gemini_image_output_price_per_million_usd": 60.0,
     }
     defaults.update(overrides)
     return Settings(**defaults)
@@ -47,18 +48,24 @@ def test_record_anthropic_usage_computes_cost_from_configured_pricing(db_session
     assert record.estimated_cost_usd == pytest.approx(3.0 + 15.0)
 
 
-def test_record_gemini_usage_computes_cost_per_image(db_session):
+def test_record_gemini_usage_computes_cost_from_actual_tokens(db_session):
+    """Cost must scale with the real input/output token counts Gemini reports
+    per call, not a flat per-image guess — a 4K-resolution generation uses far
+    more output tokens (and therefore costs more) than a 1K one, and a flat
+    per-image price can't reflect that."""
     settings = _settings()
-    fake_response = SimpleNamespace(usage_metadata=SimpleNamespace(prompt_token_count=50, candidates_token_count=0))
+    fake_response = SimpleNamespace(
+        usage_metadata=SimpleNamespace(prompt_token_count=1_000_000, candidates_token_count=1_000_000)
+    )
 
-    usage_service.record_gemini_usage("generate_image", "gemini-2.5-flash-image", fake_response, 1, settings)
+    usage_service.record_gemini_usage("generate_image", "gemini-3.1-flash-image", fake_response, 1, settings)
 
     from app.models.db_models import ApiUsageRecord
 
     record = db_session.query(ApiUsageRecord).one()
     assert record.provider == "gemini"
     assert record.image_count == 1
-    assert record.estimated_cost_usd == pytest.approx(0.03)
+    assert record.estimated_cost_usd == pytest.approx(1.0 + 60.0)
 
 
 def test_record_usage_never_raises_even_when_reading_usage_fields_fails(db_session):
@@ -89,8 +96,8 @@ def test_get_monthly_summary_aggregates_across_providers(db_session):
     )
     usage_service.record_gemini_usage(
         "generate_image",
-        "gemini-2.5-flash-image",
-        SimpleNamespace(usage_metadata=SimpleNamespace(prompt_token_count=10, candidates_token_count=0)),
+        "gemini-3.1-flash-image",
+        SimpleNamespace(usage_metadata=SimpleNamespace(prompt_token_count=1_000_000, candidates_token_count=0)),
         2,
         settings,
     )
@@ -102,5 +109,5 @@ def test_get_monthly_summary_aggregates_across_providers(db_session):
 
     assert summary["total_requests"] == 2
     assert summary["anthropic_cost_usd"] == pytest.approx(3.0)
-    assert summary["gemini_cost_usd"] == pytest.approx(0.06)
-    assert summary["total_cost_usd"] == pytest.approx(3.06)
+    assert summary["gemini_cost_usd"] == pytest.approx(1.0)
+    assert summary["total_cost_usd"] == pytest.approx(4.0)

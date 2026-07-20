@@ -14,6 +14,13 @@ class Settings(BaseSettings):
 
     gemini_api_key: str = ""
     gemini_image_model: str = "gemini-2.5-flash-image"
+    # Gemini 3.x image models bill per output resolution tier ("1K"/"2K"/"4K"):
+    # $0.067/$0.101/$0.151 per image respectively (Gemini 3.1 Flash Image
+    # pricing). Never leave this unset — an unset image_config lets Gemini
+    # pick its own resolution, which in production was observed billing at
+    # the priciest 4K tier for every image. 1K is plenty for the 1080x1350-ish
+    # social post sizes this app resizes down to anyway.
+    gemini_image_size: str = "1K"
 
     storage_root: str = "./storage"
 
@@ -89,7 +96,17 @@ class Settings(BaseSettings):
     # Gemini pricing before being relied on for a real budget figure.
     anthropic_input_price_per_million_usd: float = 1.0
     anthropic_output_price_per_million_usd: float = 5.0
-    gemini_image_price_per_image_usd: float = 0.03
+    # Gemini image cost is now computed from actual input/output tokens
+    # (usage_metadata on every generate_content response) instead of a flat
+    # per-image guess — the old flat $0.03/image estimate was off by ~3x from
+    # real spend. Input rate is Google's published $0.50/M token price for
+    # Gemini 3.1 Flash Image. Output rate is derived from the published
+    # per-image tier price ($0.067 at the 1K resolution tier) divided by the
+    # ~1120-1324 output tokens Google reports for a 1K image in that tier —
+    # still an approximation (Google bills per-image resolution tiers, not
+    # strictly per-token), but far closer to real spend than a flat guess.
+    gemini_image_input_price_per_million_usd: float = 0.50
+    gemini_image_output_price_per_million_usd: float = 60.0
     # 0 = no budget configured; the usage dashboard shows a running total
     # instead of a budget meter bar.
     monthly_budget_usd: float = 0.0

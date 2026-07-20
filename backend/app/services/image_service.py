@@ -232,6 +232,9 @@ class ImageService:
                 "Image 2 (NAIL DESIGN reference):",
                 types.Part.from_bytes(data=design_bytes, mime_type=design_mime_type),
             ],
+            config=types.GenerateContentConfig(
+                image_config=types.ImageConfig(image_size=self.settings.gemini_image_size)
+            ),
         )
         usage_service.record_gemini_usage(
             "generate_image", self.settings.gemini_image_model, response, image_count=1, settings=self.settings
@@ -263,6 +266,9 @@ class ImageService:
                 prompt + _QUALITY_SUFFIX + _NO_TEXT_SUFFIX,
                 types.Part.from_bytes(data=image_bytes, mime_type=image_mime_type),
             ],
+            config=types.GenerateContentConfig(
+                image_config=types.ImageConfig(image_size=self.settings.gemini_image_size)
+            ),
         )
         usage_service.record_gemini_usage(
             "edit_image", self.settings.gemini_image_model, response, image_count=1, settings=self.settings
